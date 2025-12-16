@@ -11,7 +11,7 @@ pipeline {
 
         // ---------- NEXUS DOCKER REGISTRY ----------
         // ⚠️ Port du Docker (hosted) repo, PAS le port Web Nexus
-        NEXUS_REGISTRY = "192.168.33.10:8083"
+        NEXUS_REGISTRY = "192.168.33.10:8085"
         DOCKER_IMAGE = "${NEXUS_REGISTRY}/student-app:${IMAGE_TAG}"
 
         // ---------- JENKINS CREDENTIALS ----------
