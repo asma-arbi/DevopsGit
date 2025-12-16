@@ -6,7 +6,7 @@ pipeline {
     }
 
     environment {
-        DOCKER_CREDENTIALS = "e0a06806-724b-42d2-9c5f-83a5d664075f"
+        DOCKER_CREDENTIALS = "github-token"
         IMAGE_TAG = "${env.BUILD_NUMBER}"  // Use Jenkins build number to ensure unique tags
 
         NEXUS_HOST = "192.168.33.10:8085"
