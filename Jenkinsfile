@@ -6,24 +6,16 @@ pipeline {
     }
 
     environment {
-        // ---------- GIT ----------
-        IMAGE_TAG = "${env.GIT_COMMIT}"
+        DOCKER_CREDENTIALS = "e0a06806-724b-42d2-9c5f-83a5d664075f"
+        IMAGE_TAG = "${env.BUILD_NUMBER}"  // Use Jenkins build number to ensure unique tags
 
-        // ---------- NEXUS DOCKER REGISTRY ----------
-        // ⚠️ Port du Docker (hosted) repo, PAS le port Web Nexus
-        NEXUS_REGISTRY = "192.168.33.10:8083"
-        DOCKER_IMAGE = "${NEXUS_REGISTRY}/student-app:${IMAGE_TAG}"
+        NEXUS_HOST = "192.168.33.10:8085"
+        NEXUS_REPO = "docker-repo"
+        DOCKER_IMAGE = "${NEXUS_HOST}/${NEXUS_REPO}/student-app:${IMAGE_TAG}"
 
-        // ---------- JENKINS CREDENTIALS ----------
-        // Credentials Jenkins de type Username/Password
-        // user: admin | password: mot de passe Nexus
-        DOCKER_CREDENTIALS = "nexus-docker"
-
-        // ---------- KUBERNETES ----------
         K8S_NAMESPACE = "devops"
         KUBECONFIG = "/var/lib/jenkins/.kube/config"
 
-        // ---------- SONARQUBE ----------
         SONAR_PROJECT_KEY = "student-app"
         SONAR_PROJECT_NAME = "Student App"
     }
@@ -45,18 +37,18 @@ pipeline {
         stage('SonarQube Analysis') {
             steps {
                 withSonarQubeEnv('sonarqube') {
-                    sh """
-                        mvn sonar:sonar \
-                          -Dsonar.projectKey=${SONAR_PROJECT_KEY} \
-                          -Dsonar.projectName="${SONAR_PROJECT_NAME}"
-                    """
+                    sh '''
+                      mvn sonar:sonar \
+                        -Dsonar.projectKey=${SONAR_PROJECT_KEY} \
+                        -Dsonar.projectName="${SONAR_PROJECT_NAME}"
+                    '''
                 }
             }
         }
 
         stage('Quality Gate') {
             steps {
-                timeout(time: 2, unit: 'MINUTES') {
+                timeout(time: 3, unit: 'MINUTES') {
                     waitForQualityGate abortPipeline: true
                 }
             }
@@ -64,9 +56,9 @@ pipeline {
 
         stage('Build Docker Image') {
             steps {
-                sh """
-                    docker build -t ${DOCKER_IMAGE} -f docker/Dockerfile .
-                """
+                sh '''
+                  docker build -t ${DOCKER_IMAGE} -f docker/Dockerfile .
+                '''
             }
         }
 
@@ -77,11 +69,11 @@ pipeline {
                     usernameVariable: 'DOCKER_USER',
                     passwordVariable: 'DOCKER_PASS'
                 )]) {
-                    sh """
-                        echo "$DOCKER_PASS" | docker login ${NEXUS_REGISTRY} -u "$DOCKER_USER" --password-stdin
-                        docker push ${DOCKER_IMAGE}
-                        docker logout ${NEXUS_REGISTRY}
-                    """
+                    sh '''
+                      echo "$DOCKER_PASS" | docker login ${NEXUS_HOST} -u "$DOCKER_USER" --password-stdin
+                      docker push ${DOCKER_IMAGE}
+                      docker logout ${NEXUS_HOST}
+                    '''
                 }
             }
         }
@@ -89,34 +81,29 @@ pipeline {
         stage('Deploy to Kubernetes') {
             steps {
                 sh '''
-                  # Create namespace if not exists
+                  # Ensure namespace exists
                   kubectl --kubeconfig=${KUBECONFIG} get namespace ${K8S_NAMESPACE} \
                     || kubectl --kubeconfig=${KUBECONFIG} create namespace ${K8S_NAMESPACE}
 
-                  # Deploy MySQL
+                  # Deploy MySQL and wait until ready
                   kubectl --kubeconfig=${KUBECONFIG} apply -f kub/mysql-deployment.yaml -n ${K8S_NAMESPACE}
+                  kubectl wait --for=condition=Ready pod -l app=mysql -n ${K8S_NAMESPACE} --timeout=180s
 
-                  # Wait MySQL
-                  kubectl wait --for=condition=Ready pod -l app=mysql \
-                    -n ${K8S_NAMESPACE} --timeout=180s
+                  # Deploy Spring app
+                  kubectl --kubeconfig=${KUBECONFIG} apply -f kub/spring-deployment.yaml -n ${K8S_NAMESPACE}
 
-                  # Deploy Spring App
-                  kubectl --kubeconfig=${KUBECONFIG} apply -f kub/spring-deployment.yaml \
-                    -n ${K8S_NAMESPACE}
-
-                  # Update image
+                  # Update image with unique tag
                   kubectl --kubeconfig=${KUBECONFIG} set image deployment/student-app \
                     student-app=${DOCKER_IMAGE} -n ${K8S_NAMESPACE}
 
-                  # Force restart pods if needed
-                  kubectl --kubeconfig=${KUBECONFIG} delete pod -l app=student-app \
-                    -n ${K8S_NAMESPACE} --force --grace-period=0 || true
+                  # Optional: force delete stuck pods (safety)
+                  kubectl --kubeconfig=${KUBECONFIG} delete pod -l app=student-app -n ${K8S_NAMESPACE} --force --grace-period=0 || true
 
-                  # Rollout status
+                  # Wait for rollout
                   kubectl --kubeconfig=${KUBECONFIG} rollout status deployment/student-app \
                     -n ${K8S_NAMESPACE} --timeout=300s
 
-                  # Show pods
+                  # Show pods status
                   kubectl --kubeconfig=${KUBECONFIG} get pods -n ${K8S_NAMESPACE}
                 '''
             }
